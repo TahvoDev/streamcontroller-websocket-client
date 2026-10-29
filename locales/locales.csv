@@ -1,0 +1,36 @@
+key;en_US
+settings-title;WebSocket Client
+settings-description;One connection per plugin instance. Changes apply when you press Apply & Reconnect.
+settings-websocket-missing;websocket-client is missing
+settings-url;URL
+settings-instance;Instance name
+settings-token;Bearer token
+settings-headers;Extra headers
+settings-headers-hint;One Name: value header per row
+settings-header;Header
+settings-header-name;Name
+settings-header-value;Value
+settings-header-add;Add
+settings-header-remove;Remove header
+settings-auto-connect;Connect on start
+settings-restore;Restore last display
+settings-restore-hint;Keep text, colours and image URLs across page switches and restarts.
+settings-log-traffic;Log traffic
+settings-log-traffic-hint;Tokens and Authorization values are redacted.
+settings-skip-tls;Skip TLS verification
+settings-skip-tls-hint;Only for self-signed development servers. Prefer a trusted certificate.
+settings-local-images;Allow local image paths
+settings-local-images-hint;Servers may reference files on this computer. Off by default.
+settings-status;Status
+settings-last-error;Last error
+settings-channels;Channels
+settings-dropped;Dropped sends
+settings-test-result;Test result
+settings-testing;Testing…
+settings-test;Test connection
+settings-apply;Apply & Reconnect
+settings-actions;Connection actions
+status-connected;Connected
+status-reconnecting;Reconnecting
+status-disconnected;Disconnected
+status-error;Error
