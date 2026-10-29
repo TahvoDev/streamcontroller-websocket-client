@@ -237,8 +237,6 @@ round-trip against [`tests/fake_server.py`](tests/fake_server.py) including
 server restart, ping/pong and invalid frames. See
 [`docs/TESTING.md`](docs/TESTING.md) for the fake-deck and real-deck checklist.
 
-GitHub Actions runs the same suite on Ubuntu with Python 3.13.
-
 ## v1 non-goals
 
 - Node-RED-aware behaviour or Node-RED-specific frame shapes.

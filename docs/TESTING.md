@@ -25,9 +25,6 @@ What is covered:
   image URL, `reset`, ping/pong, invalid frames, server restart → reconnect,
   and the **Test connection** probe.
 
-CI (`.github/workflows/tests.yml`) runs the same commands on Ubuntu with
-Python 3.13.
-
 ## Manual fake-deck E2E
 
 These steps verify the parts that only exist inside StreamController: action
