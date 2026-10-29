@@ -266,7 +266,6 @@ server restart, ping/pong and invalid frames. See
 
 ## v1 non-goals
 
-- Node-RED-aware behaviour or Node-RED-specific frame shapes.
 - Dials, touchscreens, touch keys, or screens.
 - Multiple named connections in the settings UI.
 - Server mode / listening sockets.
