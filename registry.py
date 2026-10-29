@@ -17,8 +17,12 @@ from typing import Any, Callable
 
 from loguru import logger as log
 
-from protocol import (VERSION, apply_patch, build_channel_entry, empty_state,
-                      normalize_server_message)
+try:
+    from .protocol import (VERSION, apply_patch, build_channel_entry, empty_state,
+                           normalize_server_message)
+except ImportError:  # imported as a top-level module by the test suite
+    from protocol import (VERSION, apply_patch, build_channel_entry, empty_state,
+                          normalize_server_message)
 
 DispatchFn = Callable[[Any, dict[str, Any] | None, int], None]
 
@@ -190,7 +194,10 @@ class Registry:
         return None
 
     def handle_raw(self, raw: bytes | str) -> dict[str, Any] | None:
-        from protocol import parse_frame
+        try:
+            from .protocol import parse_frame
+        except ImportError:
+            from protocol import parse_frame
 
         frame = parse_frame(raw)
         if frame is None:

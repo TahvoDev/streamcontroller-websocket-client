@@ -17,7 +17,10 @@ from urllib.parse import urlparse
 
 from loguru import logger as log
 
-from protocol import MAX_FRAME_BYTES, parse_frame
+try:
+    from .protocol import MAX_FRAME_BYTES, parse_frame
+except ImportError:  # imported as a top-level module by the test suite
+    from protocol import MAX_FRAME_BYTES, parse_frame
 
 try:
     import websocket
