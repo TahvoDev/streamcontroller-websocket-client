@@ -21,9 +21,6 @@ Version: **1.0.0** · StreamController **1.5.0+** · GPL-3.0-or-later
 - Restores the last display across page switches and app restarts.
 - Generates a stable channel name when you leave the channel field empty.
 
-It is deliberately **server-agnostic**: no Node-RED-specific logic, no raw
-mapping/templating, no dials/touch, and no server mode.
-
 ## Requirements
 
 - StreamController 1.5.0 or newer.
