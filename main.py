@@ -91,6 +91,7 @@ def _default_settings() -> dict[str, Any]:
         "default_connection": "default",
         "instance": socket.gethostname() or "streamcontroller",
         "auto_connect": True,
+        "require_server_response": True,
         "restore_last_display": True,
         "log_traffic": False,
         "allow_local_image_paths": False,
@@ -291,6 +292,16 @@ class WebSocketClientPlugin(PluginBase):
         local_paths_row.set_active(bool(self.settings.get("allow_local_image_paths", False)))
         group.add(local_paths_row)
 
+        require_response_row = Adw.SwitchRow(title=self._t(
+            "settings-require-response", "Require server response",
+        ))
+        require_response_row.set_subtitle(self._t(
+            "settings-require-response-hint",
+            "Keep keys offline until the server sends hello_ack or any valid SC/WS frame (5 s timeout).",
+        ))
+        require_response_row.set_active(bool(self.settings.get("require_server_response", True)))
+        group.add(require_response_row)
+
         status_row = Adw.ActionRow(title=self._t("settings-status", "Status"))
         last_error_row = Adw.ActionRow(title=self._t("settings-last-error", "Last error"))
         channels_row = Adw.ActionRow(title=self._t("settings-channels", "Channels"))
@@ -322,6 +333,7 @@ class WebSocketClientPlugin(PluginBase):
             "log_traffic": log_row,
             "skip_tls": skip_tls_row,
             "local_paths": local_paths_row,
+            "require_response": require_response_row,
             "status": status_row,
             "last_error": last_error_row,
             "channels": channels_row,
@@ -390,6 +402,7 @@ class WebSocketClientPlugin(PluginBase):
         self.settings["restore_last_display"] = bool(self._ui["restore"].get_active())
         self.settings["log_traffic"] = bool(self._ui["log_traffic"].get_active())
         self.settings["allow_local_image_paths"] = bool(self._ui["local_paths"].get_active())
+        self.settings["require_server_response"] = bool(self._ui["require_response"].get_active())
         self.registry.instance_id = self.settings["instance"]
         self.state_cache.enabled = self.settings["restore_last_display"]
         self._save_settings()
@@ -409,9 +422,12 @@ class WebSocketClientPlugin(PluginBase):
         headers = connection.get("headers", {})
         skip_tls = bool(connection.get("tls_skip_verify", False))
 
+        require_response = bool(self.settings.get("require_server_response", True))
+
         def worker():
             ok, detail = WebSocketClient.test_connection(
-                url, headers=headers, token=token, tls_skip_verify=skip_tls, timeout=5.0,
+                url, headers=headers, token=token, tls_skip_verify=skip_tls,
+                hello=self._build_hello(), require_response=require_response, timeout=5.0,
             )
             GLib.idle_add(self._show_test_result, ok, detail)
 
@@ -451,6 +467,7 @@ class WebSocketClientPlugin(PluginBase):
             on_frame=self._on_ws_frame,
             on_status=self._on_ws_status,
             log_traffic=bool(self.settings.get("log_traffic", False)),
+            verify_timeout=5.0 if self.settings.get("require_server_response", True) else None,
             reconnect_interval=3.0,
         )
         return self.ws_client.start()
@@ -462,7 +479,16 @@ class WebSocketClientPlugin(PluginBase):
             client.shutdown()
 
     def is_connected(self) -> bool:
-        return bool(self.ws_client and self.ws_client.connected)
+        # Socket-open alone is not enough: the server must have proven it
+        # speaks SC/WS (when response verification is enabled).
+        return bool(self.ws_client and self.ws_client.healthy)
+
+    def connection_state(self) -> str:
+        if self._status == "connected":
+            return "connected"
+        if self._status == "waiting":
+            return "waiting"
+        return "offline"
 
     def _on_ws_status(self, status: str, detail: str) -> None:
         # Called from the WebSocket thread: never touch GTK directly.
@@ -476,18 +502,22 @@ class WebSocketClientPlugin(PluginBase):
         if status == "connected":
             # Don't keep showing a stale failure next to a live connection.
             self._last_error_text = ""
-            self._apply_connected_to_actions(True)
+            action_state = "connected"
+        elif status == "waiting":
+            action_state = "waiting"
         elif status in ("disconnected", "error", "reconnecting"):
-            self._apply_connected_to_actions(False)
-        if status not in ("connected", "reconnecting", "disconnected", "error"):
+            action_state = "offline"
+        else:
+            action_state = "offline"
             log.debug(f"WebSocket Client: unknown status {status!r}")
+        self._apply_connection_state_to_actions(action_state)
         self._refresh_status_rows()
         return False
 
-    def _apply_connected_to_actions(self, connected: bool) -> None:
+    def _apply_connection_state_to_actions(self, state: str) -> None:
         for action in self.registry.all_actions():
             try:
-                action.set_connected(connected)
+                action.set_connection_state(state)
             except Exception as error:
                 log.debug(f"WebSocket Client: could not update action connection state: {error}")
 
@@ -497,12 +527,16 @@ class WebSocketClientPlugin(PluginBase):
         labels = {
             "connected": self._t("status-connected", "Connected"),
             "reconnecting": self._t("status-reconnecting", "Reconnecting"),
-            "disconnected": self._t("status-disconnected", "Disconnected"),
-            "error": self._t("status-error", "Error"),
+            "disconnected": self._t("status-offline", "Offline"),
+            "error": self._t("status-offline", "Offline"),
+            "waiting": self._t("status-waiting", "Waiting for server"),
         }
         status_text = labels.get(self._status, self._status)
-        if self._status_detail and self._status != "connected":
-            status_text = f"{status_text} — {self._status_detail}"
+        detail = self._status_detail
+        if self._status == "waiting" and detail == "No response from server":
+            detail = self._t("status-no-response", "No response from server")
+        if detail and self._status != "connected":
+            status_text = f"{status_text} — {detail}"
         self._ui["status"].set_subtitle(status_text)
         self._ui["last_error"].set_subtitle(self._last_error_text or "—")
         self._ui["channels"].set_subtitle(str(self.registry.channel_count()))

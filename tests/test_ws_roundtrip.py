@@ -51,12 +51,13 @@ class RoundTripTests(unittest.TestCase):
             ),
             on_frame=on_frame,
             on_status=on_status,
+            verify_timeout=2.0,
             reconnect_interval=0.2,
             ping_interval=5,
             ping_timeout=2,
         )
         self.assertTrue(self.client.start())
-        self.assertTrue(wait_until(lambda: self.client.connected))
+        self.assertTrue(wait_until(lambda: self.client.healthy))
         self.assertTrue(self.server.wait_for(
             lambda messages: any(item.get("type") == "hello" for item in messages)
         ))

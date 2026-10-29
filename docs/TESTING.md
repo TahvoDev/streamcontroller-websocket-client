@@ -24,12 +24,15 @@ What is covered:
   `tests/fake_server.py`: `hello`/`channels`, event reception, `set` text and
   image URL, `reset`, ping/pong, invalid frames, server restart → reconnect,
   and the **Test connection** probe.
-- `tests/test_offline_dot.py` — the offline-dot state machine: it appears on
-  disconnect, is not stacked by repeated status changes or redraws, is a
-  transparent overlay rather than a replacement for the key image, does not
-  cover a server overlay, and disappears on reconnect. The last case drives a
-  real `WebSocketClient` against `tests/fake_server.py` through both a forced
-  socket drop and a full server stop/restart. `tests/sc_stubs.py` supplies the
+- `tests/test_offline_dot.py` — the offline/waiting dot state machine: red for
+  offline, amber for waiting, composited into the key image (base icon pixels
+  survive), not stacked by repeated status changes or redraws, hidden while a
+  server overlay is active, constant size when a server image uses `size < 1`,
+  and removed on reconnect. It also drives a real `WebSocketClient` against
+  `tests/fake_server.py` through waiting → connected and forced/complete
+  outages. `tests/test_ws_verification.py` covers the acknowledgement timer,
+  no-response timeout (no reconnect), timer cancellation, disabled
+  verification, and the **Test connection** probe. `tests/sc_stubs.py` supplies the
   minimal StreamController/GTK stand-ins for the action-level assertions.
 
 ## Manual fake-deck E2E
@@ -90,7 +93,7 @@ registration, main-thread rendering, page switching and display restoration.
    The fake server receives an `event` frame whose `channel` matches the action
    and whose `event` is `down`/`up`/`short_up` etc. The action's `extra` JSON,
    deck serial, page and identifier are included. With the offline dot on,
-   stopping the server should show a small red dot while disconnected.
+   stopping the server should show a small red dot while offline.
 
 7. From the fake server console, exercise rendering:
 
@@ -111,21 +114,34 @@ registration, main-thread rendering, page switching and display restoration.
    **Restore last display** on and confirm the last text/colour/image URL comes
    back. With the toggle off, the key starts at its defaults.
 
-9. From the fake server console, type `drop` to close the client while the
-   listener stays up. The offline dot must appear on the key within a second
-   and stay there while the client retries; after the reconnect interval it
-   must disappear again without leaving a red corner behind.
+9. Check all three connection states:
 
-   Then stop and restart the whole fake server (or Node/server process). The
-   status must go through **Reconnecting** and return to **Connected**; the
-   client sends a fresh `hello`, and a subsequent `set` updates the key again.
-   Outbound events sent while disconnected are dropped and the dropped-send
-   counter increases.
+   - **Waiting for server (amber):** start a listener that accepts the upgrade
+     but sends no SC/WS frames (`FakeServer(auto_hello_ack=False)`). The status
+     must read **Waiting for server** and the key must show an amber dot; after
+     5 s the detail must read **No response from server** while the status
+     stays **Waiting**, not Offline, and no reconnect is attempted. Send any
+     valid frame and it must become **Connected** with no dot, without a
+     reconnect.
+   - **Connected (no dot):** with the normal fake server, the status is
+     **Connected** and the dot is absent.
+   - **Offline (red):** from the fake server console type `drop`, or stop the
+     server. The red dot must appear within a second, stay while retries fail,
+     and clear on reconnect. Stop/restart the whole server: the status must go
+     through **Reconnecting** and return to **Connected**; the client sends a
+     fresh `hello`, and a subsequent `set` updates the key again.
+
+   While waiting or offline the dot must sit in the corner without replacing
+   the icon or labels, and a server `overlay` must still take precedence.
+   Outbound events sent while offline are dropped and the dropped-send counter
+   increases.
 
 10. Enable **Log traffic**, reconnect, and confirm the log contains frames but
     no bearer token or `Authorization` value. Then confirm a `ws://` URL with
     an invalid host fails cleanly and **Test connection** reports the error
-    without crashing the settings window.
+    without crashing the settings window. With **Require server response** on,
+    a listener that never replies must make **Test connection** report
+    **Handshake OK, no server response**.
 
 ## Real deck checklist
 

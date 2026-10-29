@@ -12,8 +12,11 @@ Version: **0.1.0** · StreamController **1.5.0+** · GPL-3.0-or-later
   tagged with a per-key channel.
 - Renders server-pushed text (three positions + colours), images, background
   colour, overlays and an error state.
-- Reconnects automatically, sends periodic WebSocket pings, and shows
-  connection status in the plugin settings.
+- Reconnects with exponential backoff and jitter, sends periodic WebSocket
+  pings, and shows connection status in the plugin settings.
+- Distinguishes a bare WebSocket upgrade ("Waiting for server", amber dot)
+  from a server that actually speaks SC/WS ("Connected", no dot) and from a
+  closed connection ("Offline", red dot).
 - Restores the last display across page switches and app restarts.
 - Generates a stable channel name when you leave the channel field empty.
 
@@ -68,8 +71,9 @@ the plugin page.
 | Log traffic | off | Debug logs frames; tokens and `Authorization` are redacted. |
 | Skip TLS verification | off | For self-signed development servers only. |
 | Allow local image paths | off | Lets a server reference files on this computer. |
+| Require server response | on | Keep keys offline until the server sends `hello_ack` or any valid SC/WS frame within 5 s. |
 | Apply & Reconnect | — | Saves settings and restarts the connection. |
-| Test connection | — | Opens a throwaway socket; reports success within 5 s. |
+| Test connection | — | Opens a throwaway socket and, with response checking on, waits for an SC/WS frame. |
 
 The on-disk settings are profile-shaped (`connections: [...]`,
 `default_connection`), but v1 renders only the default profile. Adding a
@@ -86,7 +90,7 @@ WebSocket thread through `GLib.idle_add`.
 | Default text | empty | Shown before the server sends anything and after `reset`. |
 | Default icon | built-in | Absolute path chosen with StreamController's asset picker. |
 | Extra JSON | `{}` | Object merged into every event from this key. Invalid JSON sends `{}` and shows feedback. |
-| Show offline dot | on | Small red overlay while disconnected. It never replaces a server overlay. |
+| Show offline dot | on | Small state dot composited onto the key image: amber while waiting for the server, red while offline. It is hidden while a server overlay is active. |
 
 ## SC/WS v1
 
@@ -151,8 +155,28 @@ Other frame types:
 {"v":1,"type":"hello_ack","server":"anything"}
 ```
 
-`ping` is answered with `{"v":1,"type":"pong","ts":…}`. `hello_ack` is optional
-and logged.
+`ping` is answered with `{"v":1,"type":"pong","ts":…}`.
+
+### Connection health
+
+A successful WebSocket upgrade only proves that something is listening. The
+WebSocket protocol layer (or a proxy) answers pings without the application
+being involved, so the plugin does not report **Connected** on the upgrade
+alone. With **Require server response** on (the default), the plugin sends
+`hello` and waits up to 5 s for `hello_ack` or any other valid SC/WS v1 frame
+(`set`, `reset`, `ping`). Until one arrives the state is **Waiting for server**
+(amber dot); if nothing arrives the detail reads **No response from server** and
+the state stays amber without reconnecting. A later frame promotes the same
+connection to **Connected** (no dot) with no reconnect.
+
+A server that only reacts to key presses stays amber until it sends its first
+frame. Disable **Require server response** to go back to handshake-only
+behaviour.
+
+A closed, failed or never-opened socket is **Offline** (red dot). The dot is
+composited into the key image, so it does not hide the icon or labels. Video
+default icons are the exception: they are handed to StreamController as a media
+path and cannot carry the dot.
 
 Colours are converted to RGBA integer lists (`0–255`) before they reach
 StreamController's rendering API.

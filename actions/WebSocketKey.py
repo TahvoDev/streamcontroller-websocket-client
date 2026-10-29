@@ -18,7 +18,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk
 from loguru import logger as log
-from PIL import Image
+from PIL import Image, ImageOps
 
 import globals as gl
 from src.backend.DeckManagement.InputIdentifier import Input
@@ -53,7 +53,7 @@ class WebSocketKey(ActionCore):
 
         self._ready = False
         self._registered_channel: str | None = None
-        self._connected = False
+        self._connection_state = "offline"
         self._last_state: dict[str, Any] | None = None
         self._image_seq = 0
         self._overlay_seq = 0
@@ -62,7 +62,14 @@ class WebSocketKey(ActionCore):
         self._image_cache: OrderedDict[str, Image.Image] = OrderedDict()
         self._image_cache_lock = threading.Lock()
         self._extra_warning_emitted = False
-        self._offline_dot: Image.Image | None = None
+        # Base (dot-free) face plus the layout StreamController should apply.
+        # The offline dot is composited onto a copy of it, because
+        # StreamController overlays replace the whole key image.
+        self._base_image: Image.Image | None = None
+        self._base_path: str = ""
+        self._base_layout: dict[str, Any] = {}
+        self._default_icon_cache: tuple[str, Image.Image] | None = None
+        self._dot_cache: dict[tuple[tuple[int, int], str], Image.Image] = {}
 
         self.add_event_assigner(EventAssigner(
             id="key-down", ui_label="Key Down", default_event=Input.Key.Events.DOWN,
@@ -97,7 +104,13 @@ class WebSocketKey(ActionCore):
         else:
             revision = self.plugin_base.registry.revision(channel)
             self.apply_state(cached, revision)
-        self.set_connected(self.plugin_base.is_connected() if self.plugin_base else False)
+        state = "offline"
+        if self.plugin_base:
+            try:
+                state = self.plugin_base.connection_state()
+            except Exception:
+                state = "connected" if self.plugin_base.is_connected() else "offline"
+        self.set_connection_state(state)
 
     def on_remove(self) -> None:
         self._unregister()
@@ -256,7 +269,6 @@ class WebSocketKey(ActionCore):
 
         self._apply_overlay(state.get("overlay"), revision)
         self._apply_image(state.get("image"), revision)
-        self._sync_offline_dot()
 
     def _apply_text(self, text_state: dict[str, Any]) -> None:
         setters = {
@@ -285,7 +297,6 @@ class WebSocketKey(ActionCore):
             self._safe_call(self.hide_overlay)
             self._overlay_owner = None
         self._show_default_icon()
-        self._sync_offline_dot()
 
     def _show_default_icon(self) -> None:
         self._image_seq += 1
@@ -296,13 +307,172 @@ class WebSocketKey(ActionCore):
                 path = os.path.join(self.plugin_base.PATH, "assets", "icon.png")
             except Exception:
                 path = ""
+        self._base_layout = {}
+        self._base_path = ""
         if not path or not os.path.isfile(path):
-            self._safe_call(self.set_media, image=self._blank_image())
+            self._base_image = self._blank_image()
+            self._render_media()
             return
+
+        image = self._load_default_icon(path)
+        if image is None:
+            # Videos and other formats PIL cannot decode keep StreamController's
+            # own media_path handling. They cannot carry the composited dot.
+            self._base_image = None
+            self._base_path = path
+        else:
+            self._base_image = image
+        self._render_media()
+
+    def _load_default_icon(self, path: str) -> Image.Image | None:
         try:
-            self._safe_call(self.set_media, media_path=path)
+            stat = os.stat(path)
+            cache_key = f"{path}:{stat.st_mtime_ns}:{stat.st_size}"
+        except OSError:
+            cache_key = path
+        cached = self._default_icon_cache
+        if cached is not None and cached[0] == cache_key:
+            return cached[1].copy()
+        try:
+            with Image.open(path) as opened:
+                opened.load()
+                image = opened.convert("RGBA").copy()
+            self._default_icon_cache = (cache_key, image.copy())
+            return image
+        except Exception:
+            pass
+        try:
+            thumb = gl.media_manager.generate_svg_thumbnail(path)
+            if isinstance(thumb, Image.Image):
+                image = thumb.convert("RGBA").copy()
+                self._default_icon_cache = (cache_key, image.copy())
+                return image
         except Exception as error:
-            log.debug(f"WebSocket Client: could not show default icon {path!r}: {error}")
+            log.debug(f"WebSocket Client: could not render default icon {path!r}: {error}")
+        return None
+
+    # ------------------------------------------------------- image composition
+    def _key_image_size(self) -> tuple[int, int]:
+        try:
+            size = self.deck_controller.get_key_image_size()
+            width, height = int(size[0]), int(size[1])
+            if width > 0 and height > 0:
+                return width, height
+        except Exception:
+            pass
+        try:
+            state = self.get_state()
+            size = state.controller_input.deck_controller.get_key_image_size()
+            width, height = int(size[0]), int(size[1])
+            if width > 0 and height > 0:
+                return width, height
+        except Exception:
+            pass
+        return 144, 144
+
+    DOT_COLORS = {
+        "waiting": (245, 166, 35, 255),
+        "offline": (225, 40, 40, 255),
+    }
+
+    def _dot_layer(self, size: tuple[int, int], state: str) -> Image.Image:
+        cache_key = (size, state)
+        cached = self._dot_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        width, height = size
+        shortest = max(8, min(width, height))
+        diameter = max(6, round(shortest * 0.18))
+        margin = max(2, round(shortest * 0.04))
+        layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        try:
+            from PIL import ImageDraw
+            draw = ImageDraw.Draw(layer)
+            draw.ellipse(
+                (width - margin - diameter, height - margin - diameter,
+                 width - margin, height - margin),
+                fill=self.DOT_COLORS.get(state, self.DOT_COLORS["offline"]),
+                outline=(255, 255, 255, 220),
+                width=max(1, round(diameter * 0.12)),
+            )
+        except Exception:
+            pass
+        self._dot_cache[cache_key] = layer
+        return layer
+
+    def _composite_dot(self, base: Image.Image, state: str) -> Image.Image:
+        canvas = base.convert("RGBA").copy()
+        canvas.alpha_composite(self._dot_layer(canvas.size, state))
+        return canvas
+
+    def _dot_state(self) -> str | None:
+        if not bool(self._settings().get("show_offline_dot", True)):
+            return None
+        if self._server_overlay_active:
+            return None
+        if self._connection_state == "waiting":
+            return "waiting"
+        if self._connection_state != "connected":
+            return "offline"
+        return None
+
+    def _layout_base(self, base: Image.Image) -> Image.Image:
+        """Apply the server image layout and return a key-sized canvas.
+
+        The dot is drawn afterwards, at key-image scale, so a server image with
+        ``size`` < 1 does not shrink the dot.
+        """
+        width, height = self._key_image_size()
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        layout = self._base_layout
+        try:
+            size = float(layout.get("size") if layout.get("size") is not None else 1.0)
+        except (TypeError, ValueError):
+            size = 1.0
+        size = max(0.0, size)
+        target = (int(width * size), int(height * size))
+        if target[0] <= 0 or target[1] <= 0:
+            return canvas
+        source = base.convert("RGBA")
+        try:
+            resized = ImageOps.cover(source, target, Image.Resampling.HAMMING)
+        except Exception:
+            resized = source.resize(target, Image.Resampling.HAMMING)
+        try:
+            halign = float(layout.get("halign") or 0)
+        except (TypeError, ValueError):
+            halign = 0.0
+        try:
+            valign = float(layout.get("valign") or 0)
+        except (TypeError, ValueError):
+            valign = 0.0
+        halign = max(-1.0, min(1.0, halign))
+        valign = max(-1.0, min(1.0, valign))
+        left = int((width - resized.width) * (halign + 1) / 2)
+        top = int((height - resized.height) * (valign + 1) / 2)
+        try:
+            if resized.has_transparency_data:
+                canvas.paste(resized, (left, top), resized)
+            else:
+                canvas.paste(resized, (left, top))
+        except Exception:
+            pass
+        return canvas
+
+    def _render_media(self) -> None:
+        if not self._ready or not self.on_ready_called:
+            return
+        if self._base_image is None and self._base_path:
+            # Video/unsupported default icons keep StreamController's own
+            # media_path handling; they cannot carry the composited dot.
+            self._safe_call(self.set_media, media_path=self._base_path, **self._base_layout)
+            return
+        base = self._base_image if self._base_image is not None else self._blank_image()
+        image = self._layout_base(base)
+        state = self._dot_state()
+        if state is not None:
+            image = self._composite_dot(image, state)
+        self._safe_call(self.set_media, image=image)
 
     def _apply_image(self, spec: Any, revision: int) -> None:
         self._image_seq += 1
@@ -356,7 +526,6 @@ class WebSocketKey(ActionCore):
                 if self._overlay_owner == "server":
                     self._safe_call(self.hide_overlay)
                     self._overlay_owner = None
-                self._sync_offline_dot()
                 return False
             self._safe_call(self.show_overlay, image)
             self._overlay_owner = "server"
@@ -369,7 +538,10 @@ class WebSocketKey(ActionCore):
         size = image_spec.get("size") if isinstance(image_spec, dict) else None
         valign = image_spec.get("valign") if isinstance(image_spec, dict) else None
         halign = image_spec.get("halign") if isinstance(image_spec, dict) else None
-        self._safe_call(self.set_media, image=image, size=size, valign=valign, halign=halign)
+        self._base_image = image
+        self._base_path = ""
+        self._base_layout = {"size": size, "valign": valign, "halign": halign}
+        self._render_media()
         return False
 
     def _load_image(self, spec: dict[str, Any]) -> Image.Image | None:
@@ -467,36 +639,23 @@ class WebSocketKey(ActionCore):
     def _solid_overlay(color: list[int]) -> Image.Image:
         return Image.new("RGBA", (144, 144), tuple(color))
 
-    def _offline_dot_image(self) -> Image.Image:
-        if self._offline_dot is None:
-            image = Image.new("RGBA", (144, 144), (0, 0, 0, 0))
-            try:
-                from PIL import ImageDraw
-                draw = ImageDraw.Draw(image)
-                draw.ellipse((112, 112, 136, 136), fill=(225, 40, 40, 255),
-                             outline=(255, 255, 255, 220), width=2)
-            except Exception:
-                pass
-            self._offline_dot = image
-        return self._offline_dot
+    def set_connection_state(self, state: str) -> None:
+        if state not in ("connected", "waiting", "offline"):
+            state = "offline"
+        # Status callbacks can originate on the WebSocket or timer thread.
+        if threading.current_thread() is not threading.main_thread():
+            GLib.idle_add(self._apply_connection_state, state)
+            return
+        self._apply_connection_state(state)
+
+    def _apply_connection_state(self, state: str) -> bool:
+        self._connection_state = state
+        self._render_media()
+        return False
 
     def set_connected(self, connected: bool) -> None:
-        self._connected = bool(connected)
-        if self._ready and self.on_ready_called:
-            self._sync_offline_dot()
-
-    def _sync_offline_dot(self) -> None:
-        wanted = bool(self._settings().get("show_offline_dot", True)) and not self._connected
-        if not wanted:
-            if self._overlay_owner == "offline":
-                self._safe_call(self.hide_overlay)
-                self._overlay_owner = None
-            return
-        if self._server_overlay_active:
-            return
-        if self._overlay_owner != "offline":
-            self._safe_call(self.show_overlay, self._offline_dot_image())
-            self._overlay_owner = "offline"
+        """Backward-compatible shorthand used by older callers/tests."""
+        self.set_connection_state("connected" if connected else "offline")
 
     # ------------------------------------------------------------- config UI
     def get_config_rows(self) -> list:
@@ -620,7 +779,7 @@ class WebSocketKey(ActionCore):
     def _on_offline_toggled(self, row, _pspec) -> None:
         self._save(show_offline_dot=bool(row.get_active()))
         if self._ready:
-            self._sync_offline_dot()
+            self._render_media()
 
     def _choose_default_icon(self, row) -> None:
         current = self._settings().get("default_icon", "")

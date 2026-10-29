@@ -21,6 +21,8 @@ settings-skip-tls;Skip TLS verification
 settings-skip-tls-hint;Only for self-signed development servers. Prefer a trusted certificate.
 settings-local-images;Allow local image paths
 settings-local-images-hint;Servers may reference files on this computer. Off by default.
+settings-require-response;Require server response
+settings-require-response-hint;Keep keys offline until the server sends hello_ack or any valid SC/WS frame (5 s timeout).
 settings-status;Status
 settings-last-error;Last error
 settings-channels;Channels
@@ -34,3 +36,6 @@ status-connected;Connected
 status-reconnecting;Reconnecting
 status-disconnected;Disconnected
 status-error;Error
+status-waiting;Waiting for server
+status-no-response;No response from server
+status-offline;Offline

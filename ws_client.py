@@ -10,8 +10,10 @@ the main thread with ``GLib.idle_add``.
 from __future__ import annotations
 
 import json
+import random
 import ssl
 import threading
+import time
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -91,7 +93,9 @@ class WebSocketClient:
                  on_frame: Callable[[dict[str, Any]], None] | None = None,
                  on_status: Callable[[str, str], None] | None = None,
                  log_traffic: bool = False,
+                 verify_timeout: float | None = None,
                  reconnect_interval: float = 3.0,
+                 reconnect_max_interval: float = 30.0,
                  ping_interval: float = 20.0,
                  ping_timeout: float = 10.0):
         self.url = (url or "").strip()
@@ -103,7 +107,14 @@ class WebSocketClient:
         self.on_frame = on_frame
         self.on_status = on_status
         self.log_traffic = bool(log_traffic)
+        # When set, the socket is not reported as healthy until the server
+        # sends at least one valid SC/WS frame. This catches endpoints that
+        # accept the WebSocket upgrade but do not actually speak the protocol
+        # (for example a Node-RED listener whose flow is not wired up).
+        self.verify_timeout = verify_timeout
         self.reconnect_interval = reconnect_interval
+        self.reconnect_max_interval = max(reconnect_interval, reconnect_max_interval)
+        self._reconnect_attempt = 0
         self.ping_interval = ping_interval
         self.ping_timeout = ping_timeout
 
@@ -112,6 +123,8 @@ class WebSocketClient:
         self._thread: threading.Thread | None = None
         self._app: Any = None
         self._connected = False
+        self._healthy = False
+        self._verify_timer: threading.Timer | None = None
         self._stopping = False
         self._ever_connected = False
         self._dropped_sends = 0
@@ -122,7 +135,13 @@ class WebSocketClient:
     # ------------------------------------------------------------------ state
     @property
     def connected(self) -> bool:
+        """True while the WebSocket upgrade is open (frames can be sent)."""
         return self._connected
+
+    @property
+    def healthy(self) -> bool:
+        """True when the server has proven it speaks SC/WS (or checks are off)."""
+        return self._connected and self._healthy
 
     @property
     def dropped_sends(self) -> int:
@@ -166,9 +185,50 @@ class WebSocketClient:
             self._stopping = False
             self._stop_event.clear()
             self._last_status = None
+            self._healthy = False
+            self._reconnect_attempt = 0
             self._thread = threading.Thread(target=self._run, name="WebSocketClient", daemon=True)
             self._thread.start()
         return True
+
+    # ------------------------------------------------------- health verification
+    def _cancel_verify_timer(self) -> None:
+        with self._lock:
+            timer = self._verify_timer
+            self._verify_timer = None
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+
+    def _start_verify_timer(self) -> None:
+        timeout = self.verify_timeout
+        if not timeout or timeout <= 0:
+            return
+        self._cancel_verify_timer()
+        timer = threading.Timer(timeout, self._on_verify_timeout)
+        timer.name = "WebSocketClientVerify"
+        timer.daemon = True
+        with self._lock:
+            self._verify_timer = timer
+        timer.start()
+
+    def _on_verify_timeout(self) -> None:
+        with self._lock:
+            self._verify_timer = None
+            connected = self._connected
+            healthy = self._healthy
+        if connected and not healthy:
+            log.warning("WebSocket Client: server accepted the connection but sent no SC/WS frame")
+            self._emit_status("waiting", "No response from server")
+
+    def _mark_healthy(self) -> None:
+        if self._healthy:
+            return
+        self._healthy = True
+        self._cancel_verify_timer()
+        self._emit_status("connected", "Connected")
 
     def _ssl_options(self) -> dict[str, Any]:
         if self.url.startswith("wss://") and self.tls_skip_verify:
@@ -206,6 +266,8 @@ class WebSocketClient:
                 self._last_error = str(error) or type(error).__name__
             finally:
                 self._connected = False
+                self._healthy = False
+                self._cancel_verify_timer()
                 with self._lock:
                     if self._app is app:
                         self._app = None
@@ -218,16 +280,30 @@ class WebSocketClient:
                 self._emit_status("reconnecting", detail or "Connection lost")
             else:
                 self._emit_status("error", detail or "Connection failed")
-            if self._stop_event.wait(max(0.0, self.reconnect_interval)):
+            # Exponential backoff with jitter so a dead server is not hammered
+            # by many clients at the same cadence. Reset on a successful open.
+            attempt = self._reconnect_attempt
+            delay = min(self.reconnect_max_interval,
+                        self.reconnect_interval * (2 ** min(attempt, 8)))
+            delay *= random.uniform(0.8, 1.2)
+            self._reconnect_attempt = min(attempt + 1, 10)
+            if self._stop_event.wait(max(0.0, delay)):
                 return
 
     # -------------------------------------------------------------- callbacks
     def _on_open(self, ws) -> None:
         self._connected = True
         self._ever_connected = True
+        self._reconnect_attempt = 0
         self._last_error = ""
         self._last_close_code = None
-        self._emit_status("connected", "Connected")
+        if self.verify_timeout and self.verify_timeout > 0:
+            self._healthy = False
+            self._emit_status("waiting", "")
+            self._start_verify_timer()
+        else:
+            self._healthy = True
+            self._emit_status("connected", "Connected")
         hello = None
         if self.hello_provider is not None:
             try:
@@ -248,6 +324,10 @@ class WebSocketClient:
         frame = parse_frame(message)
         if frame is None:
             return
+        # A known SC/WS v1 frame proves the server behind the socket speaks
+        # the protocol, not just that the upgrade succeeded.
+        if frame.get("type") in ("hello_ack", "set", "reset", "ping"):
+            self._mark_healthy()
         if self.log_traffic:
             log.debug(f"WebSocket Client <- {redact(frame)}")
         if self.on_frame is not None:
@@ -258,6 +338,8 @@ class WebSocketClient:
 
     def _on_error(self, ws, error) -> None:
         self._connected = False
+        self._healthy = False
+        self._cancel_verify_timer()
         message = str(error)
         self._last_error = message or type(error).__name__
 
@@ -265,6 +347,8 @@ class WebSocketClient:
         # The run loop decides whether this was a shutdown, a retry or the end;
         # emitting here would duplicate statuses and miss later disconnects.
         self._connected = False
+        self._healthy = False
+        self._cancel_verify_timer()
         self._last_close_code = close_status_code
 
     # ------------------------------------------------------------------- send
@@ -296,6 +380,7 @@ class WebSocketClient:
 
     # --------------------------------------------------------------- shutdown
     def shutdown(self, timeout: float = 5.0) -> None:
+        self._cancel_verify_timer()
         with self._lock:
             self._stopping = True
             self._stop_event.set()
@@ -319,8 +404,9 @@ class WebSocketClient:
     def test_connection(url: str, headers: dict[str, str] | list[tuple[str, str]] | None = None,
                         token: str | None = None, tls_skip_verify: bool = False,
                         hello: dict[str, Any] | None = None,
+                        require_response: bool = False,
                         timeout: float = 5.0) -> tuple[bool, str]:
-        """Open a throwaway socket; success means the TCP/TLS/WS handshake worked."""
+        """Open a throwaway socket and optionally wait for an SC/WS frame."""
         if websocket is None:
             return False, f"websocket-client is not available: {WEBSOCKET_IMPORT_ERROR}"
         valid, reason = validate_url(url)
@@ -338,14 +424,21 @@ class WebSocketClient:
             )
             if hello is not None:
                 connection.send(json.dumps(hello, separators=(",", ":")))
-                try:
-                    connection.settimeout(1.0)
-                    reply = connection.recv()
+            if hello is not None or require_response:
+                deadline = time.monotonic() + max(0.1, timeout)
+                while time.monotonic() < deadline:
+                    connection.settimeout(max(0.1, deadline - time.monotonic()))
+                    try:
+                        reply = connection.recv()
+                    except Exception:
+                        break
                     frame = parse_frame(reply)
-                    if isinstance(frame, dict) and frame.get("type") == "hello_ack":
-                        return True, "Connected, hello_ack received"
-                except Exception:
-                    pass
+                    if isinstance(frame, dict) and frame.get("type") in (
+                        "hello_ack", "set", "reset", "ping",
+                    ):
+                        return True, "Connected, server responded"
+            if require_response:
+                return False, "Handshake OK, no server response"
             return True, "Connected"
         except Exception as error:
             return False, str(error) or type(error).__name__

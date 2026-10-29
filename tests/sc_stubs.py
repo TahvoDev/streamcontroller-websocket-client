@@ -102,8 +102,16 @@ def install() -> None:
     gi = types.ModuleType("gi")
     gi.require_version = lambda *args, **kwargs: None  # type: ignore[attr-defined]
     repository = types.ModuleType("gi.repository")
-    for name in ("Adw", "Gdk", "GLib", "Gtk"):
+
+    class GLib:
+        @staticmethod
+        def idle_add(function, *args, **kwargs):
+            function(*args, **kwargs)
+            return 0
+
+    for name in ("Adw", "Gdk", "Gtk"):
         setattr(repository, name, type(name, (), {}))
+    repository.GLib = GLib
     gi.repository = repository  # type: ignore[attr-defined]
 
     globals_module = types.ModuleType("globals")
