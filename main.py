@@ -159,7 +159,9 @@ class WebSocketClientPlugin(PluginBase):
 
         atexit.register(self.shutdown)
         if self.settings.get("auto_connect") and self._connection_settings().get("url"):
-            GLib.idle_add(self.start_connection)
+            # start_connection() returns bool; GLib would treat a True return as
+            # "run this idle source again" and reconnect in a tight loop.
+            GLib.idle_add(self._start_connection_idle)
 
     # --------------------------------------------------------------- settings
     def _load_settings(self) -> dict[str, Any]:
@@ -424,6 +426,10 @@ class WebSocketClientPlugin(PluginBase):
         return False
 
     # ------------------------------------------------------------- connection
+    def _start_connection_idle(self) -> bool:
+        self.start_connection()
+        return False
+
     def start_connection(self) -> bool:
         if WEBSOCKET_IMPORT_ERROR:
             log.error(f"WebSocket Client: websocket-client is not available: {WEBSOCKET_IMPORT_ERROR}")
