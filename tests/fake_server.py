@@ -8,6 +8,9 @@ Run it directly:
 
 Then type commands such as ``text media.mute MUTED`` or
 ``send {"v":1,"type":"set","channel":"media.mute","background":"#300000"}``.
+``drop`` closes connected clients while keeping the listener up, which is the
+quickest way to watch the plugin's offline dot appear and then clear on
+reconnect.
 """
 
 from __future__ import annotations
@@ -100,12 +103,25 @@ class FakeServer:
         self._loop = None
         self._server = None
 
-    async def _close_all(self) -> None:
-        for websocket in list(self._connections):
+    @staticmethod
+    def _abort(websocket) -> None:
+        """Drop the TCP connection without a close handshake.
+
+        A clean ``close()`` waits for the peer to finish its own handshake,
+        which can take seconds and is not what an offline test wants anyway.
+        """
+        transport = getattr(websocket, "transport", None)
+        if transport is not None and not transport.is_closing():
+            transport.abort()
+        else:
             try:
-                await websocket.close()
+                websocket.transport.close()
             except Exception:
                 pass
+
+    async def _close_all(self) -> None:
+        for websocket in list(self._connections):
+            self._abort(websocket)
         self._connections.clear()
         if self._server is not None:
             self._server.close()
@@ -113,6 +129,21 @@ class FakeServer:
                 await self._server.wait_closed()
             except Exception:
                 pass
+
+    def drop_clients(self, timeout: float = 5.0) -> int:
+        """Close connected clients but keep listening (simulates a network drop)."""
+        loop = self._loop
+        if loop is None:
+            return 0
+        with self._lock:
+            count = len(self._connections)
+        asyncio.run_coroutine_threadsafe(self._drop_all(), loop).result(timeout=timeout)
+        return count
+
+    async def _drop_all(self) -> None:
+        for websocket in list(self._connections):
+            self._abort(websocket)
+        self._connections.clear()
 
     # ------------------------------------------------------------------ handler
     async def _handler(self, websocket, *_args) -> None:
@@ -191,6 +222,7 @@ def _print_help() -> None:
     print("  error <channel> <true|false> toggle the error state")
     print("  send <json>                  broadcast a raw frame")
     print("  messages                     show frames received from the plugin")
+    print("  drop                         close clients, keep listening (offline test)")
     print("  quit")
 
 
@@ -234,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
                     with server._lock:
                         for message in server.messages:
                             print(json.dumps(message))
+                elif command == "drop":
+                    print(f"closed {server.drop_clients()} client(s); still listening")
                 else:
                     print("unknown command; type help")
             except Exception as error:

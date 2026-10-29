@@ -24,6 +24,13 @@ What is covered:
   `tests/fake_server.py`: `hello`/`channels`, event reception, `set` text and
   image URL, `reset`, ping/pong, invalid frames, server restart → reconnect,
   and the **Test connection** probe.
+- `tests/test_offline_dot.py` — the offline-dot state machine: it appears on
+  disconnect, is not stacked by repeated status changes or redraws, is a
+  transparent overlay rather than a replacement for the key image, does not
+  cover a server overlay, and disappears on reconnect. The last case drives a
+  real `WebSocketClient` against `tests/fake_server.py` through both a forced
+  socket drop and a full server stop/restart. `tests/sc_stubs.py` supplies the
+  minimal StreamController/GTK stand-ins for the action-level assertions.
 
 ## Manual fake-deck E2E
 
@@ -104,10 +111,16 @@ registration, main-thread rendering, page switching and display restoration.
    **Restore last display** on and confirm the last text/colour/image URL comes
    back. With the toggle off, the key starts at its defaults.
 
-9. Stop and restart the fake server (or Node/server process). The status must
-   go through **Reconnecting** and return to **Connected**; the client sends a
-   fresh `hello`, and a subsequent `set` updates the key again. Outbound events
-   sent while disconnected are dropped and the dropped-send counter increases.
+9. From the fake server console, type `drop` to close the client while the
+   listener stays up. The offline dot must appear on the key within a second
+   and stay there while the client retries; after the reconnect interval it
+   must disappear again without leaving a red corner behind.
+
+   Then stop and restart the whole fake server (or Node/server process). The
+   status must go through **Reconnecting** and return to **Connected**; the
+   client sends a fresh `hello`, and a subsequent `set` updates the key again.
+   Outbound events sent while disconnected are dropped and the dropped-send
+   counter increases.
 
 10. Enable **Log traffic**, reconnect, and confirm the log contains frames but
     no bearer token or `Authorization` value. Then confirm a `ws://` URL with
