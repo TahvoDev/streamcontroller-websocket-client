@@ -24,11 +24,12 @@ What is covered:
   `tests/fake_server.py`: `hello`/`channels`, event reception, `set` text and
   image URL, `reset`, ping/pong, invalid frames, server restart → reconnect,
   and the **Test connection** probe.
-- `tests/test_offline_dot.py` — the offline/waiting dot state machine: red for
-  offline, amber for waiting, composited into the key image (base icon pixels
-  survive), not stacked by repeated status changes or redraws, hidden while a
-  server overlay is active, constant size when a server image uses `size < 1`,
-  and removed on reconnect. It also drives a real `WebSocketClient` against
+- `tests/test_offline_dot.py` — the offline-dot state machine: red only when
+  the connection is known to be down (no dot while waiting), composited into
+  the key image (base icon pixels survive), not stacked by repeated status
+  changes or redraws, hidden while a server overlay is active, constant size
+  when a server image uses `size < 1`, and removed on reconnect. It also drives
+  a real `WebSocketClient` against
   `tests/fake_server.py` through waiting → connected and forced/complete
   outages. `tests/test_ws_verification.py` covers the acknowledgement timer,
   no-response timeout (no reconnect), timer cancellation, disabled
@@ -116,13 +117,12 @@ registration, main-thread rendering, page switching and display restoration.
 
 9. Check all three connection states:
 
-   - **Waiting for server (amber):** start a listener that accepts the upgrade
+   - **Waiting for server (no dot):** start a listener that accepts the upgrade
      but sends no SC/WS frames (`FakeServer(auto_hello_ack=False)`). The status
-     must read **Waiting for server** and the key must show an amber dot; after
+     must read **Waiting for server** and the key must show **no dot**; after
      5 s the detail must read **No response from server** while the status
      stays **Waiting**, not Offline, and no reconnect is attempted. Send any
-     valid frame and it must become **Connected** with no dot, without a
-     reconnect.
+     valid frame and it must become **Connected**, without a reconnect.
    - **Connected (no dot):** with the normal fake server, the status is
      **Connected** and the dot is absent.
    - **Offline (red):** from the fake server console type `drop`, or stop the
@@ -131,8 +131,8 @@ registration, main-thread rendering, page switching and display restoration.
      through **Reconnecting** and return to **Connected**; the client sends a
      fresh `hello`, and a subsequent `set` updates the key again.
 
-   While waiting or offline the dot must sit in the corner without replacing
-   the icon or labels, and a server `overlay` must still take precedence.
+   While offline the dot must sit in the corner without replacing the icon or
+   labels, and a server `overlay` must still take precedence.
    Outbound events sent while offline are dropped and the dropped-send counter
    increases.
 

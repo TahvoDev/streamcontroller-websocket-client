@@ -297,7 +297,7 @@ class WebSocketClientPlugin(PluginBase):
         ))
         require_response_row.set_subtitle(self._t(
             "settings-require-response-hint",
-            "Keep keys offline until the server sends hello_ack or any valid SC/WS frame (5 s timeout).",
+            "Show Waiting for server until the server sends hello_ack or any valid SC/WS frame (5 s timeout).",
         ))
         require_response_row.set_active(bool(self.settings.get("require_server_response", True)))
         group.add(require_response_row)

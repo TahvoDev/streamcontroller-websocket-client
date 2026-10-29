@@ -14,9 +14,10 @@ Version: **0.1.0** · StreamController **1.5.0+** · GPL-3.0-or-later
   colour, overlays and an error state.
 - Reconnects with exponential backoff and jitter, sends periodic WebSocket
   pings, and shows connection status in the plugin settings.
-- Distinguishes a bare WebSocket upgrade ("Waiting for server", amber dot)
-  from a server that actually speaks SC/WS ("Connected", no dot) and from a
-  closed connection ("Offline", red dot).
+- Distinguishes a bare WebSocket upgrade ("Waiting for server") from a server
+  that actually speaks SC/WS ("Connected") and from a closed connection
+  ("Offline"). The red dot is only shown when the connection is known to be
+  gone, never while the socket is merely silent.
 - Restores the last display across page switches and app restarts.
 - Generates a stable channel name when you leave the channel field empty.
 
@@ -71,7 +72,7 @@ the plugin page.
 | Log traffic | off | Debug logs frames; tokens and `Authorization` are redacted. |
 | Skip TLS verification | off | For self-signed development servers only. |
 | Allow local image paths | off | Lets a server reference files on this computer. |
-| Require server response | on | Keep keys offline until the server sends `hello_ack` or any valid SC/WS frame within 5 s. |
+| Require server response | on | Show **Waiting for server** until the server sends `hello_ack` or any valid SC/WS frame within 5 s. No dot is shown while the socket is open. |
 | Apply & Reconnect | — | Saves settings and restarts the connection. |
 | Test connection | — | Opens a throwaway socket and, with response checking on, waits for an SC/WS frame. |
 
@@ -90,7 +91,7 @@ WebSocket thread through `GLib.idle_add`.
 | Default text | empty | Shown before the server sends anything and after `reset`. |
 | Default icon | built-in | Absolute path chosen with StreamController's asset picker. |
 | Extra JSON | `{}` | Object merged into every event from this key. Invalid JSON sends `{}` and shows feedback. |
-| Show offline dot | on | Small state dot composited onto the key image: amber while waiting for the server, red while offline. It is hidden while a server overlay is active. |
+| Show offline dot | on | Small red dot composited onto the key image while the connection is known to be down. It is hidden while the socket is open but silent, and while a server overlay is active. |
 
 ## SC/WS v1
 
@@ -164,19 +165,21 @@ WebSocket protocol layer (or a proxy) answers pings without the application
 being involved, so the plugin does not report **Connected** on the upgrade
 alone. With **Require server response** on (the default), the plugin sends
 `hello` and waits up to 5 s for `hello_ack` or any other valid SC/WS v1 frame
-(`set`, `reset`, `ping`). Until one arrives the state is **Waiting for server**
-(amber dot); if nothing arrives the detail reads **No response from server** and
-the state stays amber without reconnecting. A later frame promotes the same
-connection to **Connected** (no dot) with no reconnect.
+(`set`, `reset`, `ping`). Until one arrives the state is **Waiting for server**;
+if nothing arrives the detail reads **No response from server** and the state
+stays **Waiting** without reconnecting. A later frame promotes the same
+connection to **Connected** with no reconnect.
 
-A server that only reacts to key presses stays amber until it sends its first
-frame. Disable **Require server response** to go back to handshake-only
-behaviour.
+A server that only reacts to key presses (or never replies at all) therefore
+stays **Waiting for server**. That is only a status text: no dot is shown,
+because the socket is still open and the plugin cannot prove the server is
+unreachable. Disable **Require server response** to treat the handshake itself
+as connected.
 
-A closed, failed or never-opened socket is **Offline** (red dot). The dot is
-composited into the key image, so it does not hide the icon or labels. Video
-default icons are the exception: they are handed to StreamController as a media
-path and cannot carry the dot.
+Only a closed, failed or never-opened socket is **Offline** and shows the red
+dot. The dot is composited into the key image, so it does not hide the icon or
+labels. Video default icons are the exception: they are handed to
+StreamController as a media path and cannot carry the dot.
 
 Colours are converted to RGBA integer lists (`0–255`) before they reach
 StreamController's rendering API.

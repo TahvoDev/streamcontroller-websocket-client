@@ -69,7 +69,7 @@ class WebSocketKey(ActionCore):
         self._base_path: str = ""
         self._base_layout: dict[str, Any] = {}
         self._default_icon_cache: tuple[str, Image.Image] | None = None
-        self._dot_cache: dict[tuple[tuple[int, int], str], Image.Image] = {}
+        self._dot_cache: dict[tuple[int, int], Image.Image] = {}
 
         self.add_event_assigner(EventAssigner(
             id="key-down", ui_label="Key Down", default_event=Input.Key.Events.DOWN,
@@ -370,14 +370,10 @@ class WebSocketKey(ActionCore):
             pass
         return 144, 144
 
-    DOT_COLORS = {
-        "waiting": (245, 166, 35, 255),
-        "offline": (225, 40, 40, 255),
-    }
+    DOT_COLOR = (225, 40, 40, 255)
 
-    def _dot_layer(self, size: tuple[int, int], state: str) -> Image.Image:
-        cache_key = (size, state)
-        cached = self._dot_cache.get(cache_key)
+    def _dot_layer(self, size: tuple[int, int]) -> Image.Image:
+        cached = self._dot_cache.get(size)
         if cached is not None:
             return cached
         width, height = size
@@ -391,18 +387,18 @@ class WebSocketKey(ActionCore):
             draw.ellipse(
                 (width - margin - diameter, height - margin - diameter,
                  width - margin, height - margin),
-                fill=self.DOT_COLORS.get(state, self.DOT_COLORS["offline"]),
+                fill=self.DOT_COLOR,
                 outline=(255, 255, 255, 220),
                 width=max(1, round(diameter * 0.12)),
             )
         except Exception:
             pass
-        self._dot_cache[cache_key] = layer
+        self._dot_cache[size] = layer
         return layer
 
-    def _composite_dot(self, base: Image.Image, state: str) -> Image.Image:
+    def _composite_dot(self, base: Image.Image) -> Image.Image:
         canvas = base.convert("RGBA").copy()
-        canvas.alpha_composite(self._dot_layer(canvas.size, state))
+        canvas.alpha_composite(self._dot_layer(canvas.size))
         return canvas
 
     def _dot_state(self) -> str | None:
@@ -410,9 +406,9 @@ class WebSocketKey(ActionCore):
             return None
         if self._server_overlay_active:
             return None
-        if self._connection_state == "waiting":
-            return "waiting"
-        if self._connection_state != "connected":
+        # Only show the dot when the socket is known to be gone. A silent but
+        # open connection is reported as "waiting" in settings, not with a dot.
+        if self._connection_state == "offline":
             return "offline"
         return None
 
@@ -469,9 +465,8 @@ class WebSocketKey(ActionCore):
             return
         base = self._base_image if self._base_image is not None else self._blank_image()
         image = self._layout_base(base)
-        state = self._dot_state()
-        if state is not None:
-            image = self._composite_dot(image, state)
+        if self._dot_state() is not None:
+            image = self._composite_dot(image)
         self._safe_call(self.set_media, image=image)
 
     def _apply_image(self, spec: Any, revision: int) -> None:

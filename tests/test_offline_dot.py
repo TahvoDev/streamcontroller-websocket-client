@@ -19,7 +19,6 @@ from actions.WebSocketKey import WebSocketKey  # noqa: E402
 from tests.fake_server import FakeServer  # noqa: E402
 from ws_client import WebSocketClient  # noqa: E402
 
-AMBER = (245, 166, 35)
 RED = (225, 40, 40)
 
 
@@ -70,7 +69,7 @@ def dot_colour(key: WebSocketKey) -> tuple[int, int, int] | None:
     if alpha < 200:
         return None
     colour = (red, green, blue)
-    if close_to(colour, RED) or close_to(colour, AMBER):
+    if close_to(colour, RED):
         return colour
     return None
 
@@ -105,14 +104,14 @@ class OfflineDotTests(unittest.TestCase):
         self.assertEqual(image.getpixel((8, 8))[3], 0)
         self.assertTrue(close_to(dot_colour(key), RED))
 
-    def test_waiting_is_amber_and_offline_is_red(self):
+    def test_only_offline_shows_a_red_dot(self):
         key = make_key()
         key.set_connection_state("waiting")
-        self.assertTrue(close_to(dot_colour(key), AMBER))
-        key.set_connection_state("offline")
-        self.assertTrue(close_to(dot_colour(key), RED))
+        self.assertIsNone(dot_colour(key))
         key.set_connection_state("connected")
         self.assertIsNone(dot_colour(key))
+        key.set_connection_state("offline")
+        self.assertTrue(close_to(dot_colour(key), RED))
 
     def test_dot_survives_full_redraws_while_offline(self):
         key = make_key()
@@ -128,13 +127,13 @@ class OfflineDotTests(unittest.TestCase):
         self.assertEqual(len(calls(key, "show_overlay")), 0)
         self.assertEqual(calls(key, "set_center_label")[-1][1][0], "STILL HERE")
 
-    def test_dot_survives_full_redraws_while_waiting(self):
+    def test_waiting_redraws_stay_dot_free(self):
         key = make_key()
         key.set_connection_state("waiting")
         key.apply_state(None)
-        self.assertTrue(close_to(dot_colour(key), AMBER))
+        self.assertIsNone(dot_colour(key))
         key.apply_state({"text": {"center": {"text": "WAITING"}}}, 0)
-        self.assertTrue(close_to(dot_colour(key), AMBER))
+        self.assertIsNone(dot_colour(key))
 
     def test_dot_does_not_replace_the_base_image(self):
         key = make_key()
@@ -218,8 +217,8 @@ class OfflineDotReconnectTests(unittest.TestCase):
     def setUp(self):
         self.key = make_key()
         self.key.set_connected(False)  # start offline, like plugin start-up
-        # No automatic ack, so the waiting (amber) state is observable and
-        # the test decides when the server proves it speaks the protocol.
+        # No automatic ack, so the waiting state is observable and the test
+        # decides when the server proves it speaks the protocol.
         self.server = FakeServer(auto_hello_ack=False).start()
         self.client = None
         self.statuses: list[tuple[str, str]] = []
@@ -262,12 +261,13 @@ class OfflineDotReconnectTests(unittest.TestCase):
         self.assertTrue(wait_until(lambda: self.client.healthy, timeout=5))
         self.assertTrue(wait_until(lambda: dot_colour(self.key) is None, timeout=5))
 
-    def test_dot_follows_waiting_connected_and_offline(self):
+    def test_dot_only_marks_confirmed_outages(self):
         self.assertTrue(close_to(dot_colour(self.key), RED))
 
         self.make_client()
         self.assertTrue(wait_until(lambda: self.client.connected))
-        self.assertTrue(wait_until(lambda: close_to(dot_colour(self.key), AMBER), timeout=3))
+        # Socket open but not yet acknowledged: status is waiting, no dot.
+        self.assertTrue(wait_until(lambda: dot_colour(self.key) is None, timeout=3))
         self.prove_protocol()
         self.assertIsNone(dot_colour(self.key))
 
@@ -276,7 +276,7 @@ class OfflineDotReconnectTests(unittest.TestCase):
         self.assertTrue(wait_until(lambda: self.client.connected is False))
         self.assertTrue(wait_until(lambda: close_to(dot_colour(self.key), RED), timeout=3))
         self.assertTrue(wait_until(lambda: self.client.connected, timeout=5))
-        self.assertTrue(wait_until(lambda: close_to(dot_colour(self.key), AMBER), timeout=3))
+        self.assertTrue(wait_until(lambda: dot_colour(self.key) is None, timeout=3))
         self.prove_protocol()
         self.assertIsNone(dot_colour(self.key))
 
@@ -291,7 +291,7 @@ class OfflineDotReconnectTests(unittest.TestCase):
 
         self.server = FakeServer(port=port, auto_hello_ack=False).start()
         self.assertTrue(wait_until(lambda: self.client.connected, timeout=15))
-        self.assertTrue(wait_until(lambda: close_to(dot_colour(self.key), AMBER), timeout=3))
+        self.assertTrue(wait_until(lambda: dot_colour(self.key) is None, timeout=3))
         self.prove_protocol()
         self.assertIsNone(dot_colour(self.key))
 
@@ -301,7 +301,7 @@ class OfflineDotReconnectTests(unittest.TestCase):
 
 
 class VerifyTimeoutDotTests(unittest.TestCase):
-    def test_waiting_dot_persists_after_timeout_and_clears_on_frame(self):
+    def test_silent_server_shows_waiting_status_without_a_dot(self):
         key = make_key()
         key.set_connection_state("offline")
         server = FakeServer(auto_hello_ack=False).start()
@@ -330,7 +330,9 @@ class VerifyTimeoutDotTests(unittest.TestCase):
             )
             self.assertTrue(client.start())
             self.assertTrue(wait_until(lambda: client.connected))
-            self.assertTrue(wait_until(lambda: close_to(dot_colour(key), AMBER), timeout=3))
+            # Socket open but unacknowledged: no dot, because it is not known
+            # to be unreachable.
+            self.assertTrue(wait_until(lambda: dot_colour(key) is None, timeout=3))
 
             # Timeout does not reconnect or relabel the state as offline.
             self.assertTrue(wait_until(
@@ -339,15 +341,14 @@ class VerifyTimeoutDotTests(unittest.TestCase):
                 timeout=3,
             ))
             self.assertFalse(client.healthy)
-            self.assertTrue(close_to(dot_colour(key), AMBER))
+            self.assertIsNone(dot_colour(key))
             self.assertFalse(any(status == "reconnecting" for status, _detail in statuses))
             self.assertTrue(client.connected)
 
-            # Any valid SC/WS frame proves the server is actually speaking
-            # the protocol, so the dot clears without a reconnect.
+            # A later valid frame promotes the connection without a reconnect.
             server.send({"v": 1, "type": "ping"})
             self.assertTrue(wait_until(lambda: client.healthy, timeout=3))
-            self.assertTrue(wait_until(lambda: dot_colour(key) is None, timeout=3))
+            self.assertIsNone(dot_colour(key))
         finally:
             if client is not None:
                 client.shutdown()
