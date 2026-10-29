@@ -1,0 +1,15 @@
+{
+  "version": "0.1.0",
+  "id": "com_tahvodev_WebSocketClient",
+  "name": "WebSocket Client",
+  "author": "TahvoDev",
+  "github": "https://github.com/TahvoDev/streamcontroller-websocket-client",
+  "tags": ["network", "websocket", "integration"],
+  "minimum-app-version": "1.5.0",
+  "app-version": "1.5.0",
+  "thumbnail": "store/thumbnail.png",
+  "description": "Connect keys to any WebSocket server.",
+  "short-description": "WebSocket client",
+  "descriptions": {"en_US": "Connect keys to any WebSocket server."},
+  "short-descriptions": {"en_US": "WebSocket client"}
+}

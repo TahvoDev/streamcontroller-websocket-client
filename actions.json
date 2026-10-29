@@ -1,0 +1,18 @@
+{
+  "plugin": {
+    "description": "Connect StreamController keys to any WebSocket server using the SC/WS v1 protocol.",
+    "requirements": "A WebSocket server that speaks SC/WS v1, reachable from this computer."
+  },
+  "actions": {
+    "WebSocketKey": {
+      "description": "Shows text, images and colors pushed by a WebSocket server and publishes this key's presses to it.",
+      "settings": {
+        "channel": {"type": "string", "required": true, "description": "Stable name for this key. Leave empty to use the generated deck/position name.", "example": "media.mute"},
+        "default_text": {"type": "string", "default": "", "description": "Text shown before the server sends anything.", "example": "Mute"},
+        "default_icon": {"type": "string", "default": "", "description": "Absolute path to the default icon image.", "example": "/home/me/icons/mute.png"},
+        "extra": {"type": "string", "default": "{}", "description": "Extra JSON merged into every event from this key.", "example": "{\"room\": \"office\"}"},
+        "show_offline_dot": {"type": "boolean", "default": true, "description": "Draw a small red dot while the WebSocket is disconnected."}
+      }
+    }
+  }
+}
