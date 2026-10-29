@@ -108,6 +108,7 @@ class WebSocketClient:
         self.ping_timeout = ping_timeout
 
         self._lock = threading.Lock()
+        self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._app: Any = None
         self._connected = False
@@ -115,6 +116,8 @@ class WebSocketClient:
         self._ever_connected = False
         self._dropped_sends = 0
         self._last_error = ""
+        self._last_close_code: int | None = None
+        self._last_status: tuple[str, str] | None = None
 
     # ------------------------------------------------------------------ state
     @property
@@ -130,6 +133,13 @@ class WebSocketClient:
         return self._last_error
 
     def _emit_status(self, status: str, detail: str = "") -> None:
+        # Failed reconnect attempts repeat the same pair every interval; only
+        # report a change so the UI and log stay quiet while offline.
+        signature = (status, detail)
+        with self._lock:
+            if signature == self._last_status:
+                return
+            self._last_status = signature
         if detail:
             self._last_error = detail if status == "error" else self._last_error
             log.info(f"WebSocket Client: {status}: {detail}")
@@ -154,6 +164,8 @@ class WebSocketClient:
             if self._thread is not None and self._thread.is_alive():
                 return True
             self._stopping = False
+            self._stop_event.clear()
+            self._last_status = None
             self._thread = threading.Thread(target=self._run, name="WebSocketClient", daemon=True)
             self._thread.start()
         return True
@@ -165,36 +177,56 @@ class WebSocketClient:
 
     def _run(self) -> None:
         self._emit_status("disconnected", "Connecting")
-        app = websocket.WebSocketApp(
-            self.url,
-            header=build_header_list(self.headers, self.token),
-            on_open=self._on_open,
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close,
-        )
-        with self._lock:
-            self._app = app
-        try:
-            app.run_forever(
-                ping_interval=self.ping_interval,
-                ping_timeout=self.ping_timeout,
-                reconnect=self.reconnect_interval,
-                sslopt=self._ssl_options(),
-            )
-        except Exception as error:  # never surface a traceback to the user
-            self._connected = False
-            self._emit_status("error", f"Connection failed: {error}")
-        finally:
-            self._connected = False
+        while True:
             with self._lock:
-                self._app = None
+                if self._stopping:
+                    return
+            app = websocket.WebSocketApp(
+                self.url,
+                header=build_header_list(self.headers, self.token),
+                on_open=self._on_open,
+                on_message=self._on_message,
+                on_error=self._on_error,
+                on_close=self._on_close,
+            )
+            with self._lock:
+                if self._stopping:
+                    return
+                self._app = app
+            try:
+                # Reconnect ourselves instead of using run_forever(reconnect=…):
+                # the library only reports the first drop and silently retries
+                # afterwards, so the UI would never learn about later outages.
+                app.run_forever(
+                    ping_interval=self.ping_interval,
+                    ping_timeout=self.ping_timeout,
+                    sslopt=self._ssl_options(),
+                )
+            except Exception as error:  # never surface a traceback to the user
+                self._last_error = str(error) or type(error).__name__
+            finally:
+                self._connected = False
+                with self._lock:
+                    if self._app is app:
+                        self._app = None
+            if self._stopping:
+                return
+            detail = self._last_error
+            if not detail and self._last_close_code is not None:
+                detail = f"Connection lost ({self._last_close_code})"
+            if self._ever_connected:
+                self._emit_status("reconnecting", detail or "Connection lost")
+            else:
+                self._emit_status("error", detail or "Connection failed")
+            if self._stop_event.wait(max(0.0, self.reconnect_interval)):
+                return
 
     # -------------------------------------------------------------- callbacks
     def _on_open(self, ws) -> None:
         self._connected = True
         self._ever_connected = True
         self._last_error = ""
+        self._last_close_code = None
         self._emit_status("connected", "Connected")
         hello = None
         if self.hello_provider is not None:
@@ -227,21 +259,13 @@ class WebSocketClient:
     def _on_error(self, ws, error) -> None:
         self._connected = False
         message = str(error)
-        if not message:
-            message = type(error).__name__
-        # If we had a working connection, the library is already retrying;
-        # "Reconnecting" is more truthful than flashing a terminal error.
-        self._emit_status("reconnecting" if self._ever_connected and not self._stopping else "error", message)
+        self._last_error = message or type(error).__name__
 
     def _on_close(self, ws, close_status_code=None, close_msg=None) -> None:
+        # The run loop decides whether this was a shutdown, a retry or the end;
+        # emitting here would duplicate statuses and miss later disconnects.
         self._connected = False
-        if self._stopping:
-            self._emit_status("disconnected", "Closed")
-            return
-        detail = "Connection lost"
-        if close_status_code is not None:
-            detail = f"Connection lost ({close_status_code})"
-        self._emit_status("reconnecting", detail)
+        self._last_close_code = close_status_code
 
     # ------------------------------------------------------------------- send
     def _send_json_ws(self, ws, payload: dict[str, Any]) -> bool:
@@ -274,6 +298,7 @@ class WebSocketClient:
     def shutdown(self, timeout: float = 5.0) -> None:
         with self._lock:
             self._stopping = True
+            self._stop_event.set()
             app = self._app
             thread = self._thread
         if app is not None:
