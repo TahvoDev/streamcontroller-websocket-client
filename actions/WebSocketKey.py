@@ -512,6 +512,8 @@ class WebSocketKey(ActionCore):
         channel_row.connect("changed", self._on_channel_changed)
         rows.append(channel_row)
 
+        # Only useful when the channel field is empty, so don't clutter the
+        # config with it once an explicit channel is set.
         generated_row = Adw.ActionRow(
             title="Generated channel",
             subtitle=self.generated_channel(),
@@ -521,6 +523,11 @@ class WebSocketKey(ActionCore):
         copy_button.set_valign(Gtk.Align.CENTER)
         copy_button.connect("clicked", lambda _button: self._copy_to_clipboard(self.generated_channel()))
         generated_row.add_suffix(copy_button)
+        generated_row.set_visible(not settings["channel"].strip())
+        channel_row.connect(
+            "changed",
+            lambda row: generated_row.set_visible(not row.get_text().strip()),
+        )
         rows.append(generated_row)
 
         text_row = Adw.EntryRow(title="Default text")

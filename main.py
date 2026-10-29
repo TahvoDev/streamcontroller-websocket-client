@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import atexit
 import copy
+import html
 import os
 import socket
 import threading
@@ -334,9 +335,12 @@ class WebSocketClientPlugin(PluginBase):
 
     def _t(self, key: str, fallback: str) -> str:
         try:
-            return self.locale_manager.get(key, fallback) or fallback
+            text = self.locale_manager.get(key, fallback) or fallback
         except Exception:
-            return fallback
+            text = fallback
+        # LocaleManager.get() HTML-escapes its result for markup-capable
+        # widgets, but every widget here takes plain text, so undo it.
+        return html.unescape(text)
 
     def _add_header_row(self, expander, rows: list[tuple[Any, Any, Any]], name: str, value: str) -> None:
         row = Adw.ActionRow(title=self._t("settings-header", "Header"))
@@ -464,6 +468,8 @@ class WebSocketClientPlugin(PluginBase):
         if status in ("error", "reconnecting") and detail:
             self._last_error_text = detail
         if status == "connected":
+            # Don't keep showing a stale failure next to a live connection.
+            self._last_error_text = ""
             self._apply_connected_to_actions(True)
         elif status in ("disconnected", "error", "reconnecting"):
             self._apply_connected_to_actions(False)
