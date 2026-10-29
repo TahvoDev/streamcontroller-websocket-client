@@ -45,7 +45,7 @@ class RoundTripTests(unittest.TestCase):
             url=f"ws://127.0.0.1:{self.server.port}",
             instance="test-instance",
             hello_provider=lambda: protocol.build_hello(
-                instance="test-instance", plugin_version="0.1.0",
+                instance="test-instance", plugin_version="1.0.0",
                 decks=[], pages=["Main"],
                 channels=[protocol.build_channel_entry("media.mute", "ABC", "Main", "key", "0x2", 0)],
             ),

@@ -241,7 +241,7 @@ class OfflineDotReconnectTests(unittest.TestCase):
             instance="offline-dot-test",
             hello_provider=lambda: protocol.build_hello(
                 instance="offline-dot-test",
-                plugin_version="0.1.0",
+                plugin_version="1.0.0",
                 decks=[],
                 pages=["Main"],
                 channels=[protocol.build_channel_entry(
@@ -319,7 +319,7 @@ class VerifyTimeoutDotTests(unittest.TestCase):
                 url=f"ws://127.0.0.1:{server.port}",
                 instance="verify-test",
                 hello_provider=lambda: protocol.build_hello(
-                    instance="verify-test", plugin_version="0.1.0",
+                    instance="verify-test", plugin_version="1.0.0",
                     decks=[], pages=["Main"], channels=[],
                 ),
                 on_status=on_status,

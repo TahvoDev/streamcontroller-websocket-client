@@ -40,7 +40,7 @@ except ImportError:  # loaded as a top-level module in some tooling
     from ws_client import WEBSOCKET_IMPORT_ERROR, WebSocketClient
     from actions.WebSocketKey import WebSocketKey
 
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "1.0.0"
 PLUGIN_ID = "com_tahvodev_WebSocketClient"
 GITHUB_REPO = "https://github.com/TahvoDev/streamcontroller-websocket-client"
 

@@ -4,7 +4,7 @@ Connect StreamController keys to **any** WebSocket server with a small,
 documented JSON protocol (SC/WS v1). One plugin instance owns one connection;
 each **WebSocket Key** action has its own channel.
 
-Version: **0.1.0** · StreamController **1.5.0+** · GPL-3.0-or-later
+Version: **1.0.0** · StreamController **1.5.0+** · GPL-3.0-or-later
 
 ## What it does
 
@@ -104,7 +104,7 @@ raise.
 On every (re)connect:
 
 ```json
-{"v":1,"type":"hello","instance":"desk-pc","plugin":"0.1.0",
+{"v":1,"type":"hello","instance":"desk-pc","plugin":"1.0.0",
  "decks":[{"serial":"ABC123","name":"Stream Deck +","rows":2,"cols":4,"dials":4,"touch":true,"screen":false}],
  "pages":["Main","Media"],
  "channels":[{"channel":"media.mute","deck":"ABC123","page":"Main","input":"key","identifier":"0x2","state":0}]}
